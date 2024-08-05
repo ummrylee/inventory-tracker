@@ -2,58 +2,78 @@
 import Image from "next/image";
 import { useState, useEffect } from "react";
 import { firestore } from "@/firebase";
-import { Box, Stack, Typography, Button, Modal, TextField } from '@mui/material'
+import { CssBaseline, Box, Stack, Typography, Button, Modal, TextField } from '@mui/material'
 import { collection, getDocs, query, doc, getDoc, setDoc, deleteDoc } from "firebase/firestore";
+import AuthButtons from './authButtons';
+import useAuth from './useAuth';
+
 
 export default function Home() {
   const [ inventory, setInventory ] = useState([]);
   const [ open, setOpen ] = useState(false);
   const [ itemName, setItemName ] = useState("");
+  const { user, loading } = useAuth();
+  const userID = user?.uid;
 
-  const updateInventory = async () => {
-    const snapshot = query(collection(firestore, 'inventory'))
-    const docs = await getDocs(snapshot)
-    const inventoryList = []
+  const updateInventory = async (userID) => {
+    if (!userID) return;  // Do nothing if no user is logged in
+    const userInventory = query(collection(firestore, `users/${userID}/inventory`));
+    const docs = await getDocs(userInventory);
+    const inventoryList = [];
     docs.forEach((doc) => {
-      inventoryList.push({ name: doc.id, ...doc.data() })
-    })
-    setInventory(inventoryList)
+      inventoryList.push({ name: doc.id, ...doc.data() });
+    });
+    setInventory(inventoryList);
   }
   
   useEffect(() => {
-    updateInventory()
+    updateInventory(userID);
   }, [])
 
-  const addItem = async (item) => {
-    const docRef = doc(collection(firestore, "inventory"), item)
-    const docSnap = await getDoc(docRef)
-    if (docSnap.exists()) {
-      const { quantity } = docSnap.data()
-      await setDoc(docRef, { quantity: quantity + 1 })
-    } else {
-      await setDoc(docRef, { quantity: 1 })
-    }
-    await updateInventory()
-  }
+  const addItem = async (item, userID) => {
+    if (!userID) return; // Guard clause to handle unauthenticated users
   
-  const removeItem = async (item) => {
-    const docRef = doc(collection(firestore, "inventory"), item)
-    const docSnap = await getDoc(docRef)
-    if (docSnap.exists()) {
-      const { quantity } = docSnap.data()
-      if (quantity === 1) {
-        await deleteDoc(docRef)
+    const itemRef = doc(collection(firestore, `users/${userID}/inventory`), item);
+  
+    try {
+      const itemSnapshot = await getDoc(itemRef);
+      if (itemSnapshot.exists()) {
+        // If item exists, update its quantity
+        await setDoc(itemRef, { quantity: itemSnapshot.data().quantity + 1 }, { merge: true });
       } else {
-        await setDoc(docRef, { quantity: quantity - 1 })
+        // If item doesn't exist, create it with quantity 1
+        await setDoc(itemRef, { quantity: 1 });
+      }
+    } catch (error) {
+      console.error("Error updating inventory:", error);
+    }
+  
+    updateInventory(userID); // Update local state to reflect changes
+  };
+  
+  const removeItem = async (item, userID) => {
+    if (!userID) return;
+    const docRef = doc(collection(firestore, `users/${userID}/inventory`), item);
+    const docSnap = await getDoc(docRef);
+    if (docSnap.exists()) {
+      const { quantity } = docSnap.data();
+      if (quantity === 1) {
+        await deleteDoc(docRef);
+      } else {
+        await setDoc(docRef, { quantity: quantity - 1 });
       }
     }
-    await updateInventory()
+    await updateInventory(userID);
   }
 
 
   useEffect(() => {
-    updateInventory();
-  }, []);
+    if (user) {
+      updateInventory(user.uid);
+    } else {
+      setInventory([]);  // Clear inventory when there is no user
+    }
+  }, [user]);
 
   const handleOpen = () => {
     setOpen(true);
@@ -65,13 +85,17 @@ export default function Home() {
 
   return (
     <Box width="100vw" height="100vh" display="flex" justifyContent="center" flexDirection="column" alignItems="center" gap={2}>
+      <CssBaseline />
+      <Box sx={{ p: 3 }}>
+        <AuthButtons />
+      </Box>
       <Modal open={open} onClose={handleClose}>
         <Box position="absolute" top="50%" left="50%" width={400} bgcolor="white" border="2px solid #000" boxShadow={24} p={4} display="flex" flexDirection="column" gap={3} sx={{transform: 'translate(-50%, -50%)'}}>
           <Typography variant="h6">Add Item</Typography>
           <Stack width="100%" direction="row" spacing={2}>
             <TextField variant="outlined" fullWidth value={itemName} onChange={(e) => setItemName(e.target.value)}/>
             <Button variant="outlined" onClick={() => {
-                addItem(itemName)
+                addItem(itemName, userID)
                 setItemName("")
                 handleClose()
               }}>
@@ -108,10 +132,10 @@ export default function Home() {
                 Quantity: {quantity}
               </Typography>
               <Stack direction="row" spacing={2}>
-              <Button variant="contained" onClick={() => addItem(name)}>
+              <Button variant="contained" onClick={() => addItem(name, userID)}>
                 Add
               </Button>
-              <Button variant="contained" onClick={() => removeItem(name)}>
+              <Button variant="contained" onClick={() => removeItem(name, userID)}>
                 Remove
               </Button>
               </Stack>
